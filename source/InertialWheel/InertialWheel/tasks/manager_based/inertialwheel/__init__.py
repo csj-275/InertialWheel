@@ -13,7 +13,7 @@ from . import agents
 
 
 gym.register(
-    id="Template-Inertialwheel-v0",
+    id="Isaac-Inertialwheel-v0",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",
     disable_env_checker=True,
     kwargs={

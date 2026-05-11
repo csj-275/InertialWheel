@@ -61,7 +61,11 @@ class ActionsCfg:
     joint_effort = mdp.JointEffortActionCfg(
         asset_name="robot", 
         joint_names=["wheel_joint"], 
-        scale=100.0)
+        scale=0.01)
+    # joint_effort = mdp.JointVelocityActionCfg(
+    #     asset_name="robot", 
+    #     joint_names=["wheel_joint"], 
+    #     scale=10.0)
 
 
 @configclass
@@ -94,8 +98,8 @@ class EventCfg:
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=["body_joint"]),
-            "position_range": (-1.0, 1.0),
-            "velocity_range": (-0.5, 0.5),
+            "position_range": (3.14, 3.14),
+            "velocity_range": (-0.0, 0.0),
         },
     )
 
@@ -104,8 +108,8 @@ class EventCfg:
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=["wheel_joint"]),
-            "position_range": (-0.25 * math.pi, 0.25 * math.pi),
-            "velocity_range": (-0.25 * math.pi, 0.25 * math.pi),
+            "position_range": (-0.0 * math.pi, 0.0 * math.pi),
+            "velocity_range": (-0.0 * math.pi, 0.0 * math.pi),
         },
     )
 
@@ -119,23 +123,23 @@ class RewardsCfg:
     # (2) Failure penalty
     terminating = RewTerm(func=mdp.is_terminated, weight=-2.0)
     # (3) Primary task: keep pole upright
-    pole_pos = RewTerm(
+    body_pos = RewTerm(
         func=mdp.joint_pos_target_l2,
-        weight=-1.0,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=["body_joint"]), "target": -1.57},
+        weight=1.0,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=["body_joint"]), "target": math.pi},
     )
     # (4) Shaping tasks: lower cart velocity
-    cart_vel = RewTerm(
+    body_vel = RewTerm(
         func=mdp.joint_vel_l1,
         weight=-0.01,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=["body_joint"])},
     )
     # (5) Shaping tasks: lower pole angular velocity
-    pole_vel = RewTerm(
-        func=mdp.joint_vel_l1,
-        weight=-0.005,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=["wheel_joint"])},
-    )
+    # wheel_vel = RewTerm(
+    #     func=mdp.joint_vel_l1,
+    #     weight=-0.005,
+    #     params={"asset_cfg": SceneEntityCfg("robot", joint_names=["wheel_joint"])},
+    # )
 
 
 @configclass

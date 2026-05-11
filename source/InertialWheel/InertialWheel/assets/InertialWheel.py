@@ -19,8 +19,8 @@ INERTIAL_WHEEL_PENDULUM_CFG = ArticulationCfg(
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
             rigid_body_enabled=True,
-            max_linear_velocity=1000.0,
-            max_angular_velocity=1000.0,
+            max_linear_velocity=10000.0,
+            max_angular_velocity=10000.0,
             max_depenetration_velocity=5.0,
             enable_gyroscopic_forces=True,
         ),
@@ -41,7 +41,7 @@ INERTIAL_WHEEL_PENDULUM_CFG = ArticulationCfg(
     actuators={
         "wheel_actuator": ImplicitActuatorCfg(
             joint_names_expr=["wheel_joint"],
-            effort_limit_sim=400.0,
+            effort_limit_sim=4000.0,
             stiffness=0.0, # 位置控制的刚度，力控设为0
             damping=10.0, # 阻尼
         ),

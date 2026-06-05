@@ -33,17 +33,24 @@ INERTIAL_WHEEL_PENDULUM_CFG = ArticulationCfg(
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 0.0), 
-        joint_pos={"body_joint": 0.0, 
+        pos=(0.0, 0.0, 0.0),
+        joint_pos={"body_joint": 0.0,
                    "wheel_joint": 0.0}
     ),
-    # 关节驱动器
+    # 关节驱动器（所有关节必须在这里配置，引擎才会管理）
+    # wheel_joint: 主动驱动关节，接收 action 力矩
+    # body_joint:  被动关节，stiffness=0 保证自由摆动，damping 防止数值震荡
     actuators={
         "wheel_actuator": ImplicitActuatorCfg(
             joint_names_expr=["wheel_joint"],
-            effort_limit_sim=4000.0,
-            stiffness=0.0, # 位置控制的刚度，力控设为0
-            damping=10.0, # 阻尼
+            effort_limit_sim=50.0,
+            stiffness=0.0,
+            damping=0.01,
+        ),
+        "body_actuator": ImplicitActuatorCfg(
+            joint_names_expr=["body_joint"],
+            stiffness=0.0,
+            damping=0.0,
         ),
     },
 )

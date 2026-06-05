@@ -15,7 +15,7 @@ scene, action, observation and event managers to create an environment.
 
 """Launch Isaac Sim Simulator first."""
 
-
+import time
 import argparse
 
 import torch
@@ -117,7 +117,7 @@ def main():
                       f"error: {error[0].item():+.3f} rad, "
                       f"torque: {torque[0].item():+.1f} Nm")
             step_count += 1
-
+            time.sleep(0.01)  # slow down for better visualization
     # close the environment
     env.close()
 

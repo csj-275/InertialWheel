@@ -1,0 +1,9 @@
+# Best LQR params
+Q = diag([1000, 0, 300, 5])
+R = 200
+KI = 5000
+Torque_max = 50.0
+Integral_init_mode = 1 (zero-initialized)
+K = [13.157706, 9e-06, 2.799342, -0.168428]
+Steady_RMS = 0.00053646 rad (0.030737 deg)
+Converged = True

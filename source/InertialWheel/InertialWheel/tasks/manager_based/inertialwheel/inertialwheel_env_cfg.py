@@ -59,13 +59,9 @@ class InertialwheelSceneCfg(InteractiveSceneCfg):
 class ActionsCfg:
     """Action specifications for the MDP."""
     joint_effort = mdp.JointEffortActionCfg(
-        asset_name="robot", 
-        joint_names=["wheel_joint"], 
-        scale=0.01)
-    # joint_effort = mdp.JointVelocityActionCfg(
-    #     asset_name="robot", 
-    #     joint_names=["wheel_joint"], 
-    #     scale=10.0)
+        asset_name="robot",
+        joint_names=["wheel_joint"],
+        scale=50.0)
 
 
 @configclass
@@ -76,8 +72,13 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         """Observations for policy group."""
 
-        # observation terms (order preserved)
-        joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel)
+        # sin/cos encoding avoids the pi/-pi discontinuity
+        body_sin_cos = ObsTerm(func=mdp.joint_sin_cos_pos,
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names=["body_joint"])})
+        # wheel joint raw position (not wrapped at pi, so fine as raw)
+        joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel,
+            params={"asset_cfg": SceneEntityCfg("robot", joint_names=["wheel_joint"])})
+        # velocities for all joints
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel)
 
         def __post_init__(self) -> None:
@@ -92,24 +93,25 @@ class ObservationsCfg:
 class EventCfg:
     """Configuration for events."""
 
-    # reset
-    reset_cart_position = EventTerm(
+    # reset body_joint: random near downward (0) so agent must learn to swing up
+    reset_body_position = EventTerm(
         func=mdp.reset_joints_by_offset,
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=["body_joint"]),
-            "position_range": (3.14, 3.14),
-            "velocity_range": (-0.0, 0.0),
+            "position_range": (-0.5, 0.5),
+            "velocity_range": (-0.5, 0.5),
         },
     )
 
-    reset_pole_position = EventTerm(
+    # reset wheel_joint: random small rotation, small velocity
+    reset_wheel_position = EventTerm(
         func=mdp.reset_joints_by_offset,
         mode="reset",
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=["wheel_joint"]),
-            "position_range": (-0.0 * math.pi, 0.0 * math.pi),
-            "velocity_range": (-0.0 * math.pi, 0.0 * math.pi),
+            "position_range": (-0.5, 0.5),
+            "velocity_range": (-0.5, 0.5),
         },
     )
 
@@ -118,34 +120,33 @@ class EventCfg:
 class RewardsCfg:
     """Reward terms for the MDP."""
 
-    # (1) Constant running reward
-    alive = RewTerm(func=mdp.is_alive, weight=1.0)
-    # (2) Failure penalty
-    terminating = RewTerm(func=mdp.is_terminated, weight=-2.0)
-    # (3) Primary task: keep pole upright
-    body_pos = RewTerm(
-        func=mdp.joint_pos_target_l2,
-        weight=1.0,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=["body_joint"]), "target": math.pi},
-    )
-    # (4) Shaping tasks: lower cart velocity
-    body_vel = RewTerm(
-        func=mdp.joint_vel_l1,
-        weight=-0.01,
+    # (1) Smooth cos-based reward: 1 at upright (π), 0 at downward (0)
+    upright = RewTerm(
+        func=mdp.upright_reward_cos,
+        weight=10.0,
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=["body_joint"])},
     )
-    # (5) Shaping tasks: lower pole angular velocity
-    # wheel_vel = RewTerm(
-    #     func=mdp.joint_vel_l1,
-    #     weight=-0.005,
-    #     params={"asset_cfg": SceneEntityCfg("robot", joint_names=["wheel_joint"])},
-    # )
+    # (2) Penalize body angular velocity
+    body_vel = RewTerm(
+        func=mdp.joint_vel_l1,
+        weight=-0.1,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=["body_joint"])},
+    )
+    # (3) Penalize excessive wheel velocity
+    wheel_vel = RewTerm(
+        func=mdp.joint_vel_l1,
+        weight=-0.005,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=["wheel_joint"])},
+    )
 
 
 @configclass
 class TerminationsCfg:
     """Termination terms for the MDP."""
-    # (1) Time out
+    # Time out only — no fall termination.
+    # This is a swing-up task: the pendulum starts near downward and needs
+    # the full 360° range to reach upright. Any angle-based termination
+    # would cut episodes short before learning can happen.
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
 
 

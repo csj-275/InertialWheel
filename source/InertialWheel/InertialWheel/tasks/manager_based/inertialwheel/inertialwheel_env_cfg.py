@@ -120,11 +120,11 @@ class EventCfg:
 class RewardsCfg:
     """Reward terms for the MDP."""
 
-    # (1) Smooth cos-based reward: 1 at upright (π), 0 at downward (0)
+    # (1) Smooth cos-based reward: 1 at upright (target=π), 0 at downward
     upright = RewTerm(
         func=mdp.upright_reward_cos,
         weight=10.0,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names=["body_joint"])},
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names=["body_joint"]), "target": math.pi*4/5},
     )
     # (2) Penalize body angular velocity
     body_vel = RewTerm(

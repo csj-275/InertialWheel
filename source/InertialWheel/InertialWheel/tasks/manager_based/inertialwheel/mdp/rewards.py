@@ -43,15 +43,15 @@ def joint_sin_cos_pos(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torc
     return torch.cat([torch.sin(joint_pos), torch.cos(joint_pos)], dim=-1)
 
 
-def upright_reward_cos(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-    """Smooth reward in [0, 1]: 1 at upright (θ=π), 0 at downward (θ=0).
+def upright_reward_cos(env: ManagerBasedRLEnv, target: float, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    """Smooth reward in [0, 1]: 1 at upright (θ=target), 0 at downward (θ=target-π).
 
-    Uses cos(θ - π) = -cos(θ) so the gradient is smooth everywhere
+    Uses cos(θ - target) so the gradient is smooth everywhere
     with no discontinuity at the wrap boundary.
     """
     asset: Articulation = env.scene[asset_cfg.name]
     joint_pos = asset.data.joint_pos[:, asset_cfg.joint_ids]
-    cos_dev = torch.cos(joint_pos - math.pi)
+    cos_dev = torch.cos(joint_pos - target)
     return ((cos_dev + 1.0) / 2.0).squeeze(-1)
 
 

@@ -1,31 +1,31 @@
 <mujoco model="inertial_wheel">
   <compiler angle="radian" meshdir="meshes" />
   <option gravity="0 0 -9.81" />
-  
+
   <asset>
     <mesh name="base_link_mesh" file="base_link.STL" />
     <mesh name="body_link_mesh" file="body_link.STL" />
     <mesh name="wheel_link_mesh" file="wheel_link.STL" />
   </asset>
-  
+
   <worldbody>
-    <!-- Base Link -->
+    <!-- Base Link (fixed) -->
     <body name="base_link" pos="0 0 0">
-      <inertial pos="2.57576013168561E-05 1.9569274489454E-20 0.200087575844477" 
-                mass="2.56131946891451" 
+      <inertial pos="2.57576013168561E-05 1.9569274489454E-20 0.200087575844477"
+                mass="2.56131946891451"
                 diaginertia="0.0355367988064824 0.0355401301955985 0.002734017188082" />
       <geom type="mesh" mesh="base_link_mesh" rgba="1 1 1 1" />
-      
-      <!-- Body Link Joint -->
-      <body name="body_link" pos="0.0527499998627018 -0.00245970967873153 0.370659077505919" 
+
+      <!-- Body Link (passive pendulum, no spring) -->
+      <body name="body_link" pos="0.0527499998627018 -0.00245970967873153 0.370659077505919"
             euler="0 1.5707963267949 -1.5707963267949">
-        <inertial pos="-0.0021314 -0.0087625 0.023582" 
-                  mass="0.75136" 
+        <inertial pos="-0.0021314 -0.0087625 0.023582"
+                  mass="0.75136"
                   diaginertia="0.0024331 0.00020294 0.0025846" />
         <geom type="mesh" mesh="body_link_mesh" rgba="1 1 1 1" />
-        <joint name="body_joint" type="hinge" axis="0 0 1" damping="0.01"/>
+        <joint name="body_joint" type="hinge" axis="0 0 1" damping="0.0"/>
 
-        <!-- Wheel Link Joint -->
+        <!-- Wheel Link (driven by motor) -->
         <body name="wheel_link" pos="-0.0024597 0.17566 0.045207">
           <inertial pos="1.1467E-07 -1.0111E-07 3.9989E-05"
                     mass="0.12807"
@@ -38,7 +38,7 @@
   </worldbody>
 
   <actuator>
-    <motor name="wheel_joint" joint="wheel_joint" gear="1"/>
+    <motor name="wheel_joint" joint="wheel_joint" gear="1" ctrlrange="-50 50"/>
   </actuator>
-  
+
 </mujoco>

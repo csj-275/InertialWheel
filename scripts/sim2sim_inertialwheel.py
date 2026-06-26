@@ -1,212 +1,182 @@
 """
-sim2sim_inertialwheel.py — 将 Isaac Lab 训练的策略部署到 MuJoCo 仿真
+sim2sim_inertialwheel.py
 
-用法:
-    # 用最新一次训练的模型
+Transfer a policy trained in Isaac Lab (Isaac-Inertialwheel-v0) to MuJoCo.
+
+Physics alignment verified (2026-06-11):
+  - mass / inertia / center-of-mass: ✓ identical
+  - joint positions (localPos0 / origin):     ✓ identical
+  - body_joint axis (0,0,1):                  ✓ identical
+  - wheel_joint axis: USD (0,0,1) vs MuJoCo (0,0,-1)
+        → action sign is flipped by default (--action_sign -1)
+  - torque limit: 50 N·m in both
+  - body_joint damping: 0 in both
+
+Usage:
+    # Latest run, with viewer
     python scripts/sim2sim_inertialwheel.py
 
-    # 指定特定训练记录
-    python scripts/sim2sim_inertialwheel.py --run 2026-06-05_11-52-51
-
-物理对齐说明:
-    MuJoCo 的坐标/惯量/阻尼已经与 Isaac Lab 对齐。
-    如果 wheel 力矩方向反了，设置 --action_sign -1。
+    # Specific run, headless
+    python scripts/sim2sim_inertialwheel.py --run 2026-06-05_11-52-51 --no_render
 """
 
 import argparse
 import os
-import time
 
 import numpy as np
 import torch
 
-# MuJoCo
 import mujoco
 import mujoco.viewer
 
 # =============================================================
-# 解析参数
+# CLI
 # =============================================================
-parser = argparse.ArgumentParser(description="Sim2Sim: deploy Isaac Lab policy to MuJoCo")
+parser = argparse.ArgumentParser(description="sim2sim: Isaac Lab → MuJoCo")
 parser.add_argument("--run", type=str, default=None,
-                    help="训练记录文件夹名 (如 2026-06-05_11-52-51)，默认自动选最新的")
+                    help="Training run folder (default: latest)")
 parser.add_argument("--action_sign", type=int, default=-1, choices=[1, -1],
-                    help="力矩符号修正 (Default -1: MuJoCo wheel axis 方向与 USD 相反)")
+                    help="Torque sign. -1 because MuJoCo wheel axis = (0,0,-1) vs USD (0,0,1).")
 parser.add_argument("--action_scale", type=float, default=50.0,
-                    help="策略输出 [-1,1] → 实际力矩的缩放系数 (训练时 scale=50)")
-parser.add_argument("--xml", type=str,
-                    default="./Mujoco/inertial_wheel/scene.xml",
-                    help="MuJoCo 场景 XML")
+                    help="Scale policy output [-1,1] → torque. Matches JointEffortActionCfg(scale=50).")
+parser.add_argument("--xml", type=str, default="./Mujoco/inertial_wheel/scene.xml",
+                    help="MuJoCo scene XML")
 parser.add_argument("--max_steps", type=int, default=4000,
-                    help="最大仿真步数 (0=无限)")
+                    help="Max simulation steps (0 = infinite)")
 parser.add_argument("--no_render", action="store_true",
-                    help="不打开渲染窗口，仅跑仿真")
+                    help="Disable viewer (headless)")
+parser.add_argument("--random_init", action="store_true",
+                    help="Random initial pose (default: start at downward θ=0)")
 args = parser.parse_args()
 
 # =============================================================
-# 自动找最新的策略
+# Locate policy
 # =============================================================
 log_root = "logs/rsl_rl/inertialwheel"
 if args.run is None:
     runs = sorted(os.listdir(log_root))
     if not runs:
-        raise FileNotFoundError(f"没有找到任何训练记录在 {log_root}")
+        raise FileNotFoundError(f"No training runs found under {log_root}")
     args.run = runs[-1]
 
 policy_path = os.path.join(log_root, args.run, "exported", "policy.pt")
 if not os.path.exists(policy_path):
-    # 尝试找 onnx
     policy_path = os.path.join(log_root, args.run, "exported", "policy.onnx")
+    if not os.path.exists(policy_path):
+        raise FileNotFoundError(f"No exported policy found under {log_root}/{args.run}/exported/")
 
-print(f"[Info] 加载策略: {policy_path}")
-print(f"[Info] 力矩符号: {'正' if args.action_sign == 1 else '反'}")
+print(f"[Info] Loading policy: {policy_path}")
 
 # =============================================================
-# 加载策略
+# Load policy
 # =============================================================
 device = "cuda" if torch.cuda.is_available() else "cpu"
 if policy_path.endswith(".onnx"):
     import onnxruntime as ort
-    session = ort.InferenceSession(policy_path)
+    sess = ort.InferenceSession(policy_path)
     def policy(obs_np):
-        inputs = {session.get_inputs()[0].name: obs_np.astype(np.float32)}
-        return session.run(None, inputs)[0]
-    policy_device = "cpu"
+        inp = {sess.get_inputs()[0].name: obs_np.astype(np.float32)}
+        return sess.run(None, inp)[0]
 else:
     policy_jit = torch.jit.load(policy_path, map_location=device)
     policy_jit.eval()
     def policy(obs_np):
         obs_t = torch.from_numpy(obs_np).float().to(device)
         with torch.inference_mode():
-            a = policy_jit(obs_t)
-        return a.cpu().numpy()
-    policy_device = device
+            return policy_jit(obs_t).cpu().numpy()
 
 # =============================================================
-# MuJoCo 环境
+# MuJoCo model
 # =============================================================
-XML_PATH = os.path.abspath(args.xml)
-model = mujoco.MjModel.from_xml_path(XML_PATH)
+model = mujoco.MjModel.from_xml_path(os.path.abspath(args.xml))
 data = mujoco.MjData(model)
 
-# 确认关节和 actuator 索引
-body_joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "body_joint")
-wheel_joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "wheel_joint")
-wheel_actuator_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "wheel_joint")
-print(f"[Info] body_joint_id={body_joint_id}, wheel_joint_id={wheel_joint_id}, wheel_act_id={wheel_actuator_id}")
-assert wheel_actuator_id >= 0, "找不到 wheel_joint actuator"
+# Joint IDs
+body_jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "body_joint")
+wheel_jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "wheel_joint")
+wheel_act = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "wheel_joint")
+assert wheel_act >= 0, "actuator 'wheel_joint' not found"
 
-# 关节状态索引
-body_qpos_adr = model.jnt_qposadr[body_joint_id]
-body_dof_adr = model.jnt_dofadr[body_joint_id]
-wheel_qpos_adr = model.jnt_qposadr[wheel_joint_id]
-wheel_dof_adr = model.jnt_dofadr[wheel_joint_id]
+# State indices
+bq_adr = model.jnt_qposadr[body_jid]
+bv_adr = model.jnt_dofadr[body_jid]
+wq_adr = model.jnt_qposadr[wheel_jid]
+wv_adr = model.jnt_dofadr[wheel_jid]
 
-print(f"[Info] body_qpos_adr={body_qpos_adr}, body_dof_adr={body_dof_adr}")
-print(f"[Info] wheel_qpos_adr={wheel_qpos_adr}, wheel_dof_adr={wheel_dof_adr}")
+print(f"[Info] body_joint qpos_adr={bq_adr} dof_adr={bv_adr}")
+print(f"[Info] wheel_joint qpos_adr={wq_adr} dof_adr={wv_adr}")
 
 # =============================================================
-# 观测函数: 匹配 Isaac Lab 的训练观测
-#
-# Isaac Lab 观测 (5维):
-#   [sin(body_pos), cos(body_pos), wheel_pos, body_vel, wheel_vel]
+# 5-D observation ─ same pipeline as training
+#   [sin(body_q), cos(body_q), wheel_q, body_v, wheel_v]
 # =============================================================
 def get_obs():
-    body_q = data.qpos[body_qpos_adr]       # body_joint 角度
-    body_v = data.qvel[body_dof_adr]         # body_joint 速度
-    wheel_q = data.qpos[wheel_qpos_adr]      # wheel_joint 角度
-    wheel_v = data.qvel[wheel_dof_adr]       # wheel_joint 速度
+    bq = data.qpos[bq_adr]
+    bv = data.qvel[bv_adr]
+    wq = data.qpos[wq_adr]
+    wv = data.qvel[wv_adr]
+    return np.array([np.sin(bq), np.cos(bq), wq, bv, wv], dtype=np.float32)
 
-    obs = np.array([
-        np.sin(body_q),
-        np.cos(body_q),
-        wheel_q,
-        body_v,
-        wheel_v,
-    ], dtype=np.float32)
-    return obs
-
-def reset_to_pose(body_angle=0.0, body_vel=0.0, wheel_angle=0.0, wheel_vel=0.0):
-    """复位到指定位置 (摆杆下垂)"""
-    data.qpos[body_qpos_adr] = body_angle
-    data.qpos[wheel_qpos_adr] = wheel_angle
-    data.qvel[body_dof_adr] = body_vel
-    data.qvel[wheel_dof_adr] = wheel_vel
+# =============================================================
+# Main loop
+# =============================================================
+def main():
+    # Initial condition: downward (θ=0), small perturbation if random
+    rng = np.random.RandomState(42)
+    if args.random_init:
+        data.qpos[bq_adr] = rng.uniform(-0.5, 0.5)
+        data.qvel[bv_adr] = rng.uniform(-0.5, 0.5)
+    data.qpos[wq_adr] = data.qvel[wv_adr] = 0.0
     mujoco.mj_forward(model, data)
 
-# =============================================================
-# 主循环
-# =============================================================
-def run_simulation(render=True, max_steps=4000):
-    # 初始复位: 摆杆下垂
-    np.random.seed(0)
-    init_body = np.random.uniform(-0.3, 0.3)
-    init_wheel = np.random.uniform(-0.3, 0.3)
-    init_body_v = np.random.uniform(-0.3, 0.3)
-    init_wheel_v = np.random.uniform(-0.3, 0.3)
-    reset_to_pose(init_body, init_body_v, init_wheel, init_wheel_v)
-
     step = 0
-    total_reward = 0.0
 
-    if render:
-        with mujoco.viewer.launch_passive(model, data) as viewer:
-            while viewer.is_running():
-                # --- 策略推理 ---
-                obs = get_obs()
-                action = policy(obs[np.newaxis])  # [1, 5] -> [1, 1]
-                torque = float(action[0, 0]) * args.action_scale * args.action_sign
-
-                # --- 施加动作 ---
-                data.ctrl[wheel_actuator_id] = torque
-
-                # --- MuJoCo 步进 ---
-                mujoco.mj_step(model, data)
-
-                # --- 打印状态 ---
-                if step % 50 == 0:
-                    body_q = data.qpos[body_qpos_adr]
-                    wheel_q = data.qpos[wheel_qpos_adr]
-                    body_v = data.qvel[body_dof_adr]
-                    wheel_v = data.qvel[wheel_dof_adr]
-                    up_reward = (np.cos(body_q - np.pi) + 1) / 2
-                    print(f"step={step:5d}  body_q={body_q:+.3f}  wheel_q={wheel_q:+.3f}  "
-                          f"body_v={body_v:+.3f}  wheel_v={wheel_v:+.3f}  "
-                          f"torque={torque:+.2f}  upright={up_reward:.3f}")
-
-                # --- 同步 viewer ---
-                viewer.sync()
-
-                step += 1
-                if 0 < max_steps <= step:
-                    print(f"\n[Info] 达到最大步数 {max_steps}")
-                    break
-    else:
-        # 无渲染模式（快速跑）
-        while step < max_steps:
-            obs = get_obs()
-            action = policy(obs[np.newaxis])
+    if args.no_render:
+        while step < args.max_steps or args.max_steps == 0:
+            action = policy(get_obs()[np.newaxis])           # [1,5] → [1,1]
             torque = float(action[0, 0]) * args.action_scale * args.action_sign
-            data.ctrl[wheel_actuator_id] = torque
+            data.ctrl[wheel_act] = torque
             mujoco.mj_step(model, data)
 
             if step % 100 == 0:
-                body_q = data.qpos[body_qpos_adr]
-                up_reward = (np.cos(body_q - np.pi) + 1) / 2
-                print(f"step={step:5d}  body_q={body_q:+.3f}  upright={up_reward:.3f}  torque={torque:+.2f}")
-
+                bq = data.qpos[bq_adr]
+                upright = (np.cos(bq - np.pi) + 1) / 2
+                print(f"step={step:5d}  body_q={bq:+.3f}  upright={upright:.3f}  torque={torque:+.2f}")
             step += 1
 
-    return step
+        print(f"\n[Done] {step} steps simulated")
+        return
+
+    # ── With viewer ──
+    with mujoco.viewer.launch_passive(model, data) as viewer:
+        while viewer.is_running():
+            action = policy(get_obs()[np.newaxis])
+            torque = float(action[0, 0]) * args.action_scale * args.action_sign
+            data.ctrl[wheel_act] = torque
+            mujoco.mj_step(model, data)
+
+            if step % 50 == 0:
+                bq = data.qpos[bq_adr]
+                wq = data.qpos[wq_adr]
+                bv = data.qvel[bv_adr]
+                wv = data.qvel[wv_adr]
+                upright = (np.cos(bq - np.pi) + 1) / 2
+                print(f"step={step:5d}  body_q={bq:+.3f}  wheel_q={wq:+.3f}  "
+                      f"body_v={bv:+.3f}  wheel_v={wv:+.3f}  "
+                      f"torque={torque:+.2f}  upright={upright:.3f}")
+
+            viewer.sync()
+            step += 1
+            if 0 < args.max_steps <= step:
+                print(f"[Done] reached max_steps={args.max_steps}")
+                break
+
 
 if __name__ == "__main__":
     print("=" * 60)
-    print(f"实验: {args.run}")
-    print(f"策略: {policy_path}")
-    print(f"XML:  {args.xml}")
-    print(f"渲染: {'开' if not args.no_render else '关'}")
+    print(f"  Run:   {args.run}")
+    print(f"  XML:   {args.xml}")
+    print(f"  Scale: {args.action_scale}  Sign: {args.action_sign}")
+    print(f"  View:  {'on' if not args.no_render else 'off'}")
     print("=" * 60)
-    print()
-
-    total_steps = run_simulation(render=not args.no_render, max_steps=args.max_steps)
-    print(f"\n[完成] 共仿真 {total_steps} 步")
+    main()
